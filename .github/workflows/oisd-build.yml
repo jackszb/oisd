@@ -1,0 +1,109 @@
+name: Update oisd Domains
+
+on:
+  schedule:
+    - cron: "0 0 * * *"   # 每天 00:00 UTC 自动更新
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download oisd_big.txt
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/sjhgvr/oisd/main/oisd_big.txt" -o oisd_big.txt
+
+      - name: Download oisd_nsfw.txt
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/sjhgvr/oisd/main/oisd_nsfw.txt" -o oisd_nsfw.txt
+
+      - name: Extract domains (for oisd_big.txt)
+        run: |
+          mkdir -p tmp
+          grep '^||' oisd_big.txt \
+            | sed 's/^||//' \
+            | sed 's/\^$//' \
+            | sed '/^$/d' \
+            | sort -u \
+            > tmp/domain_list_big.txt
+
+      - name: Extract domains (for oisd_nsfw.txt)
+        run: |
+          grep '^||' oisd_nsfw.txt \
+            | sed 's/^||//' \
+            | sed 's/\^$//' \
+            | sed '/^$/d' \
+            | sort -u \
+            > tmp/domain_list_nsfw.txt
+
+      - name: Build oisd.json (oisd_big.txt)
+        run: |
+          jq -n --rawfile raw tmp/domain_list_big.txt '
+            {
+              version: 3,
+              rules: [
+                {
+                  domain_suffix: (
+                    $raw
+                    | split("\n")
+                    | map(select(length > 0))
+                  )
+                }
+              ]
+            }
+          ' > oisd-big.json
+
+      - name: Build oisd.json (oisd_nsfw.txt)
+        run: |
+          jq -n --rawfile raw tmp/domain_list_nsfw.txt '
+            {
+              version: 3,
+              rules: [
+                {
+                  domain_suffix: (
+                    $raw
+                    | split("\n")
+                    | map(select(length > 0))
+                  )
+                }
+              ]
+            }
+          ' > oisd-nsfw.json
+
+      - name: Install sing-box (official script)
+        run: |
+          curl -fsSL https://sing-box.app/install.sh | sh
+
+      - name: Compile oisd.srs using sing-box (big)
+        run: |
+          /usr/bin/sing-box rule-set compile \
+            --output oisd-big.srs \
+            oisd-big.json
+
+      - name: Compile oisd.srs using sing-box (nsfw)
+        run: |
+          /usr/bin/sing-box rule-set compile \
+            --output oisd-nsfw.srs \
+            oisd-nsfw.json
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add oisd-big.json oisd-big.srs \
+                 oisd-nsfw.json oisd-nsfw.srs
+
+          if git diff --cached --quiet; then
+            echo "No changes detected."
+          else
+            git commit -m "Update oisd for oisd_big.txt & oisd_nsfw.txt"
+            git push
+          fi
